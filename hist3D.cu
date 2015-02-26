@@ -34,50 +34,63 @@ static void gpuCheckError( cudaError_t err,
     }
 }
  
-// cannot return values, so must store
-// result in global memory location ("count")
-// also: must make sure this thread maps to useful data! (what if
-// the # of threads is > than the number of data elements!)
-__global__ void histogram_gpu (unsigned int max, unsigned int *A, unsigned int *histogram)
+ __global__ void histogram_gpu (unsigned int x_dim, unsigned int y_dim, unsigned int z_dim, unsigned int *A, unsigned int *histogram)
 {
- 
-    int n = blockDim.x * blockIdx.x + threadIdx.x;
- 
+    unsigned int x = blockDim.x * blockIdx.x + threadIdx.x;
+    unsigned int y = blockDim.y * blockIdx.y + threadIdx.y;
+    unsigned int z = blockDim.z * blockIdx.z + threadIdx.z;
     // do nothing if we are not in the useable space of
     // threads (see kernel launch call: you may be creating
     // more threads than you need)
-    if (n >= max) return;
+    if (x >= x_dim || y >= y_dim || z >= z_dim) return;
+
+    unsigned int n = x + y * x_dim + z * (x_dim*y_dim);
  
     unsigned int a = A[n];
- 
+
     atomicAdd(&histogram[(a-1)/100], 1);
  
 }
- 
-
-__global__ void histogram_gpu2 (unsigned int max, unsigned int *A, unsigned int *histogram)
+//5856163 125155 86911 92881 146032 769086 44499 24940 23150 40143 
+__global__ void histogram_gpu2 (unsigned int x_dim, unsigned int y_dim, unsigned int z_dim, unsigned int *A, unsigned int *histogram)
 {
  
     __shared__ unsigned int s_histogram [10];
-    int n = blockDim.x * blockIdx.x + threadIdx.x;
+    int x = blockDim.x * blockIdx.x + threadIdx.x;
+    int y = blockDim.y * blockIdx.y + threadIdx.y;
+    int z = blockDim.z * blockIdx.z + threadIdx.z;
     int tId = threadIdx.x;
-    if (tId < 10) 
+    bool smallBlock = (blockDim.x < 10);
+
+    if(smallBlock)
+        if (threadIdx.x==0 && threadIdx.y==0 && threadIdx.z==0)
+        for(int i = 0; i < 10; i++) s_histogram[tId]=0;
+    else
         s_histogram[tId]=0;
+
     __syncthreads();
  
     // do nothing if we are not in the useable space of
     // threads (see kernel launch call: you may be creating
     // more threads than you need)
-    if (n >= max) return;
- 
+    if (x >= x_dim || y >= y_dim || z >= z_dim) return;
+    unsigned int n = x + y * x_dim + z * (x_dim*y_dim);
+
     unsigned int a = A[n];
  
     atomicAdd(&s_histogram[(a-1)/100], 1);
     __syncthreads();
 
-    if (tId < 10) 
-        histogram[tId] = s_histogram[tId];
- 
+    if (smallBlock){
+        // if (threadIdx.x==0 && threadIdx.y==0 && threadIdx.z==0)
+        for(int i = 0; i < 10; i++) {
+            int value = s_histogram[i];
+            if(value == 0) continue;
+            int value2 = atomicCAS(&s_histogram[i], value, 0);
+            atomicAdd(&histogram[i], value2); 
+        }
+    }
+    else atomicAdd(&histogram[tId], s_histogram[tId]); 
 }
 
 int main (int argc, char *argv[])
@@ -97,7 +110,7 @@ int main (int argc, char *argv[])
         return 0;
     }
 
-    int x, y, z;
+    unsigned int x, y, z;
     infile >> x >> y >> z;
     int maxTested = x * y *z;
     unsigned int n, i;
@@ -135,6 +148,8 @@ int main (int argc, char *argv[])
     }
     assert (maxTested==i);
 
+    printf ("x %d, y %d, z %d, maxTested %d\n", x,y,z,maxTested);
+
     // // fill it with numbers in file
     // for (unsigned int i = 0; i < maxTested; ++i) {
     //     infile >> n;
@@ -145,7 +160,7 @@ int main (int argc, char *argv[])
     gettimeofday (&t0, 0);
 
 
-    int histogram[10];
+    unsigned int histogram[10];
     for(int i=0;i<10;i++) histogram[i] = 0;
     // count how many are prime:
     for (int i = 0; i < maxTested; ++i) {
@@ -191,10 +206,24 @@ int main (int argc, char *argv[])
     // rounding before the ceil() call:
     unsigned int threads_per_block = 512;
     unsigned int num_blocks = ceil (maxTested / (1.0*threads_per_block) );
- 
+
+    int x_dim = min(8,x), y_dim = min(8,y), z_dim = min(8,z);
+
+    unsigned int num_blocks_x = ceil (1.0*x / (1.0*x_dim) );
+    unsigned int num_blocks_y = ceil (1.0*y / (1.0*y_dim) );
+    unsigned int num_blocks_z = ceil (1.0*z / (1.0*z_dim) );
+
+    printf ("x_dim %d, y_dim %d, z_dim %d \n", x_dim,y_dim,z_dim);
+    printf ("num_blocks_x %d, num_blocks_y %d, num_blocks_z %d \n", num_blocks_x,num_blocks_y,num_blocks_z);
+
+
+    dim3 dimGrid(num_blocks_x, num_blocks_y, num_blocks_z);
+    dim3 dimBlock(x_dim, y_dim, z_dim); 
+
     // launch the kernel:
-    histogram_gpu<<<num_blocks, threads_per_block>>>
-                                        (maxTested,
+    // histogram_gpu0<<<num_blocks, threads_per_block>>>
+    histogram_gpu<<<dimGrid, dimBlock>>>
+                                        (x,y,z,
                                         d_intAArray,
                                         d_histogram);
  
