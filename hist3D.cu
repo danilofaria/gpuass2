@@ -1,7 +1,3 @@
-#ifndef __CUDACC__ 
-#define __CUDACC__
-#endif
-
 #include <stdio.h>     
 #include <stdlib.h>     
 #include <sys/time.h>
@@ -14,13 +10,6 @@
 #include <stdexcept>      // std::invalid_argument
 #include <assert.h>     /* assert */
 
-
-
-#include "cuda_runtime.h"
-#include "device_launch_parameters.h"
-#include <cuda.h>
-#include <device_functions.h>
-#include <cuda_runtime_api.h>
 
 // error checking for CUDA calls: use this around ALL your calls!
 #define GPU_CHECKERROR( err ) (gpuCheckError( err, __FILE__, __LINE__ ))
@@ -59,14 +48,9 @@ __global__ void histogram_gpu2 (unsigned int x_dim, unsigned int y_dim, unsigned
     int x = blockDim.x * blockIdx.x + threadIdx.x;
     int y = blockDim.y * blockIdx.y + threadIdx.y;
     int z = blockDim.z * blockIdx.z + threadIdx.z;
-    int tId = threadIdx.x;
-    bool smallBlock = (blockDim.x < 10);
 
-    if(smallBlock)
-        if (threadIdx.x==0 && threadIdx.y==0 && threadIdx.z==0)
+    if (threadIdx.x==0 && threadIdx.y==0 && threadIdx.z==0)
         for(int i = 0; i < 10; i++) s_histogram[i]=0;
-    else
-        s_histogram[tId]=0;
 
     __syncthreads();
  
@@ -81,13 +65,9 @@ __global__ void histogram_gpu2 (unsigned int x_dim, unsigned int y_dim, unsigned
     atomicAdd(&s_histogram[(a-1)/100], 1);
     __syncthreads();
 
-    if (smallBlock){
-        if (threadIdx.x==0 && threadIdx.y==0 && threadIdx.z==0)
+    if (threadIdx.x==0 && threadIdx.y==0 && threadIdx.z==0)
         for(int i = 0; i < 10; i++) 
             atomicAdd(&histogram[i], s_histogram[i]); 
-    }
-    else 
-        atomicAdd(&histogram[tId], s_histogram[tId]); 
 }
 
 int main (int argc, char *argv[])
